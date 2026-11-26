@@ -1452,7 +1452,7 @@ function prodForm(p,onDone){
           minStock:r2($('#f_min',sh).value),supplier:$('#f_sup',sh).value.trim(),note:$('#f_note',sh).value.trim(),py:pinyin(name)};
         if(isNew){o.id=uid();o.createdAt=Date.now();D().products.push(o);toast('已新增商品「'+name+'」')}
         else{Object.assign(p,o);toast('已保存修改')}
-        DB.save();closeModal();onDone?onDone():render();
+        DB.save();closeModal();onDone?onDone(isNew?o:p):render();
       };
       setTimeout(()=>{const n=$('#f_name',sh);if(n)n.focus()},80);
     }});
@@ -2380,6 +2380,13 @@ function matchProduct(q){
   return score>=32?best:null;
 }
 const UNIT_RE='[个把盒根米卷包套件台瓶张只条支桶袋公斤斤]*';
+function cleanProdName(q){
+  let s=String(q==null?'':q).trim();
+  const m=s.match(/^(.{2,20}?)((?:给|替|帮|送|寄|发|拿|带|留)(?:你|我|他|她|咱|师傅|老板|客户|工地|家里|店里|过去|过来|走|到)|发到|送到|寄到|带给|发给|送给|拿给|那边|那里|一下).*/);
+  if(m&&m[1].length>=2)s=m[1];
+  s=s.replace(/[吧啊呀嘛哦哈喽]+$/,'').trim();
+  return s||String(q==null?'':q).trim();
+}
 function parseVoice(text,mode,lines,meta){
   String(text==null?'':text).split(/[，,。！!？?；;、\n]+/).forEach(seg=>{
     seg=seg.trim();if(!seg)return;
@@ -2401,12 +2408,15 @@ function parseVoice(text,mode,lines,meta){
     lines.push({q:q,qty:qty,pid:p?p.id:null,name:p?p.name:q});
   });
 }
+let VS={lines:[],meta:{},mode:'sale'};
 function voiceOrder(mode){
   if(!Speech.ok){toast('当前浏览器不支持语音识别，建议用 Chrome / Edge 打开','err');return}
   const isSale=mode==='sale';
-  const lines=[],meta={};
+  VS.mode=mode;
+  const lines=VS.lines,meta=VS.meta;
   modal({title:isSale?'语音开单':'语音入库',
-    body:'<div class="center"><button class="vbig" id="vBig" type="button">'+ico('mic')+'</button>'+
+    body:(P().length?'':'<div class="alert warn">'+ico('alert')+'<div>当前<b>没有商品档案</b>，语音说的商品会先显示「未识别」：点条目旁的<b>新建</b>即可快速建档（填好进价售价保存后自动回到本窗并匹配）；也可先到「商品库存」批量录入，或在「设置备份」恢复备份 / 载入演示数据。</div></div><div style="height:12px"></div>')+
+      '<div class="center"><button class="vbig" id="vBig" type="button">'+ico('mic')+'</button>'+
       '<div class="small muted mt12" id="vHint">点话筒开始说话，说完再点一下停止</div></div>'+
       '<div class="vtrans" id="vTrans">'+(isSale?'示例：「三把十字螺丝刀，两个角磨机，客户李师傅，赊账」':'示例：「五十包电焊条，二十盘焊丝，供应商金桥焊材，赊账」')+'</div>'+
       '<div id="vList" class="mt12"></div>'+
@@ -2433,10 +2443,16 @@ function voiceOrder(mode){
         if(!lines.length&&!metas.length){list.innerHTML='';return}
         let h=lines.map((x,i)=>'<div class="row small" style="padding:6px 0;border-bottom:1px solid var(--line2)">'+
           (x.pid?'<span class="badge in">'+fmt0(x.qty)+' × '+esc(x.name)+'</span>':'<span class="badge out">未识别：'+esc(x.q)+'</span>')+
-          '<span class="spacer"></span><button class="iconbtn danger" data-vdel="'+i+'" type="button">'+ico('x')+'</button></div>').join('');
+          '<span class="spacer"></span>'+
+          (x.pid?'':'<button class="btn sm" data-vnew="'+i+'" type="button">新建</button>')+
+          '<button class="iconbtn danger" data-vdel="'+i+'" type="button">'+ico('x')+'</button></div>').join('');
         if(metas.length)h+='<div class="tiny muted mt8">'+metas.map(esc).join(' · ')+'</div>';
         list.innerHTML=h;
         $$('[data-vdel]',list).forEach(b=>b.onclick=()=>{lines.splice(+b.dataset.vdel,1);renderList()});
+        $$('[data-vnew]',list).forEach(b=>b.onclick=()=>{
+          const row=VS.lines[+b.dataset.vnew];if(!row)return;
+          prodForm({name:cleanProdName(row.q)},np=>{if(np&&np.id){row.pid=np.id;row.name=np.name}voiceOrder(VS.mode)});
+        });
       };
       const setTrans=inter=>{const v=(acc+(inter||'')).trim();trans.textContent=v||trans.dataset.ph};
       const toggle=()=>{
@@ -2475,7 +2491,11 @@ function voiceOrder(mode){
       $('#vClear',sh).onclick=()=>{lines.length=0;for(const k in meta)delete meta[k];acc='';trans.textContent=trans.dataset.ph;renderList()};
       $('#vApply',sh).onclick=()=>{
         const matched=lines.filter(x=>x.pid);
-        if(!matched.length&&!meta.customer&&!meta.supplier&&!meta.method){toast('还没识别到内容，先点话筒说话','warn');return}
+        if(!matched.length&&!meta.customer&&!meta.supplier&&!meta.method){
+          if(lines.length&&!P().length)toast('商品档案为空：请先点「未识别」条目旁的「新建」建档，或到「设置备份」恢复备份','warn');
+          else toast('还没识别到内容，先点话筒说话','warn');
+          return;
+        }
         matched.forEach(x=>{isSale?addProd(x.pid,x.qty):addPProd(x.pid,x.qty)});
         if(isSale){
           if(meta.customer)cart.customer=meta.customer;
@@ -2486,6 +2506,7 @@ function voiceOrder(mode){
           if(meta.method)pcart.method=meta.method;
         }
         const miss=lines.length-matched.length;
+        VS.lines=[];VS.meta={};
         closeModal();render();
         toast('已加入 '+matched.length+' 项商品'+(miss?'，另有 '+miss+' 项未识别请手动添加':''));
       };
